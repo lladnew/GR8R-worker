@@ -1,10 +1,8 @@
-// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.4.9
+// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.5.0
 //
 // Changelog:
-// - Fixes EmailOctopus error by moving api_key to query string
-// - Skips empty fields in EO payload
-// - Logs EO payload and response for better debugging
-// - Retains Airtable create/update logic and logging
+// - Removes 'tags' and 'status' from EO payload (not supported / unused)
+// - Retains valid EO fields and logging for troubleshooting
 
 export default {
   async fetch(request, env, ctx) {
@@ -107,7 +105,7 @@ export default {
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
       }
 
-      // EmailOctopus logic
+      // EmailOctopus logic (no tags, no status)
       const eoFields = {};
       if (firstName) eoFields.FirstName = firstName;
       if (lastName) eoFields.LastName = lastName;
@@ -117,9 +115,7 @@ export default {
 
       const eoPayload = {
         email_address: emailAddress,
-        fields: eoFields,
-        tags: tags,
-        status: "subscribed"
+        fields: eoFields
       };
 
       console.log("Sending to EmailOctopus:", JSON.stringify(eoPayload, null, 2));
