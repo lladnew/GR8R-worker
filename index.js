@@ -1,13 +1,15 @@
-// Cloudflare Worker: Airtable Proxy v1.4.7
+// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.4.8
 //
 // Changelog:
-// - Fixes casing mismatch: handles both DeliveryPreference and deliveryPreference
-// - Handles CampaignInterest from either camelCase or PascalCase
-// - Keeps all logging intact for visibility
+// - Sends subscriber data directly to EmailOctopus
+// - Removes Zapier dependency entirely
+// - Adds Pivot Year and Delivery Preference to EO custom fields
+// - Logs responses from both Airtable and EmailOctopus
+// - Retains full logging for tail debugging
 
 export default {
   async fetch(request, env, ctx) {
-    const { AIRTABLE_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_ID } = env;
+    const { AIRTABLE_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_ID, EO_API_KEY, EO_LIST_ID } = env;
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -26,17 +28,19 @@ export default {
 
     try {
       const body = await request.json();
+      const {
+        firstName,
+        lastName,
+        emailAddress,
+        phoneNumber,
+        DeliveryPreference,
+        CampaignInterest,
+        source
+      } = body;
+
       console.log("Incoming payload:", JSON.stringify(body, null, 2));
 
-      const firstName = body.firstName || "";
-      const lastName = body.lastName || "";
-      const emailAddress = body.emailAddress || "";
-      const phoneNumber = body.phoneNumber || "";
-      const source = body.source || "Direct";
-
-      const deliveryPreference = body.deliveryPreference || body.DeliveryPreference || null;
-      const campaignInterest = body.campaignInterest || body.CampaignInterest || "";
-
+      // Airtable setup
       const headers = {
         Authorization: `Bearer ${AIRTABLE_TOKEN}`,
         "Content-Type": "application/json"
@@ -48,7 +52,11 @@ export default {
       console.log("Search result:", JSON.stringify(searchData, null, 2));
 
       const now = new Date().toISOString();
-      const tags = campaignInterest.split(",").map(tag => tag.trim()).filter(Boolean);
+      const tags = CampaignInterest?.split(",").map(tag => tag.trim()).filter(Boolean) || [];
+      const delivery = ["Both", "Email", "Text"].includes(DeliveryPreference) ? DeliveryPreference : undefined;
+
+      console.log("Normalized tags:", tags);
+      console.log("Delivery preference:", delivery);
 
       const baseFields = {
         "First Name": firstName,
@@ -56,24 +64,15 @@ export default {
         "Email": emailAddress,
         "Phone number": phoneNumber
       };
+      if (delivery) baseFields["Delivery Preference"] = delivery;
+      if (tags.length > 0) baseFields["Campaign Interest"] = tags;
 
-      if (deliveryPreference && ["Both", "Email", "Text"].includes(deliveryPreference)) {
-        baseFields["Delivery Preference"] = deliveryPreference;
-      }
-
-      if (tags.length > 0) {
-        baseFields["Campaign Interest"] = tags;
-      }
-
-      console.log("Normalized tags:", tags);
-      console.log("Delivery preference:", deliveryPreference);
-      console.log("Base fields to apply:", JSON.stringify(baseFields, null, 2));
-
+      // Create or update Airtable record
       if (!searchData.records || searchData.records.length === 0) {
         const fields = {
           ...baseFields,
           "Subscribed Date": now,
-          "Source": source,
+          "Source": source || "Direct",
           "Status": "Pending"
         };
 
@@ -85,14 +84,9 @@ export default {
 
         const createResult = await createRes.json();
         console.log("Create result:", JSON.stringify(createResult, null, 2));
-        return new Response(JSON.stringify({ status: "created" }), {
-          status: 200,
-          headers: { "Access-Control-Allow-Origin": "*" }
-        });
       } else {
         const record = searchData.records[0];
         const patchFields = {};
-
         for (const [key, value] of Object.entries(baseFields)) {
           if (value !== undefined && value !== "") {
             patchFields[key] = value;
@@ -102,20 +96,48 @@ export default {
         console.log("Updating record:", record.id);
         console.log("Patch payload:", JSON.stringify(patchFields, null, 2));
 
-        const patchRes = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`, {
-          method: "PATCH",
-          headers,
-          body: JSON.stringify({ fields: patchFields })
-        });
+        const patchRes = await fetch(
+          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`,
+          {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify({ fields: patchFields })
+          }
+        );
 
         const patchResult = await patchRes.json();
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
-
-        return new Response(JSON.stringify({ status: "updated" }), {
-          status: 200,
-          headers: { "Access-Control-Allow-Origin": "*" }
-        });
       }
+
+      // EmailOctopus integration
+      const eoPayload = {
+        api_key: EO_API_KEY,
+        email_address: emailAddress,
+        fields: {
+          FirstName: firstName || "",
+          LastName: lastName || "",
+          Phone: phoneNumber || "",
+          DeliveryPreference: delivery || "",
+          PivotYear: tags.includes("Pivot Year") ? "yes" : "no"
+        },
+        tags: tags,
+        status: "subscribed"
+      };
+
+      const eoRes = await fetch(`https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(eoPayload)
+      });
+
+      const eoResult = await eoRes.json();
+      console.log("EmailOctopus result:", JSON.stringify(eoResult, null, 2));
+
+      return new Response(JSON.stringify({ status: searchData.records.length ? "updated" : "created" }), {
+        status: 200,
+        headers: { "Access-Control-Allow-Origin": "*" }
+      });
+
     } catch (error) {
       console.error("Error processing request:", error);
       return new Response("Internal Server Error", {
