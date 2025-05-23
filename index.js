@@ -1,8 +1,9 @@
-// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.5.0
+// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.5.1
 //
 // Changelog:
-// - Removes 'tags' and 'status' from EO payload (not supported / unused)
-// - Retains valid EO fields and logging for troubleshooting
+// - Detects existing EO contact by email
+// - Uses PATCH if found, POST if new
+// - No tags, no status; logs EO request + response
 
 export default {
   async fetch(request, env, ctx) {
@@ -105,7 +106,7 @@ export default {
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
       }
 
-      // EmailOctopus logic (no tags, no status)
+      // EmailOctopus logic (lookup, patch or create)
       const eoFields = {};
       if (firstName) eoFields.FirstName = firstName;
       if (lastName) eoFields.LastName = lastName;
@@ -118,19 +119,40 @@ export default {
         fields: eoFields
       };
 
-      console.log("Sending to EmailOctopus:", JSON.stringify(eoPayload, null, 2));
+      console.log("EO Payload:", JSON.stringify(eoPayload, null, 2));
 
-      const eoRes = await fetch(
-        `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts?api_key=${EO_API_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(eoPayload)
-        }
+      // First, try to find existing EO contact
+      const searchEO = await fetch(
+        `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${encodeURIComponent(emailAddress)}?api_key=${EO_API_KEY}`,
+        { method: "GET" }
       );
 
-      const eoResult = await eoRes.json();
-      console.log("EmailOctopus result:", JSON.stringify(eoResult, null, 2));
+      if (searchEO.status === 200) {
+        const existing = await searchEO.json();
+        console.log("EO Contact Found. Updating…");
+        const updateRes = await fetch(
+          `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${existing.id}?api_key=${EO_API_KEY}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fields: eoFields })
+          }
+        );
+        const updateResult = await updateRes.json();
+        console.log("EO Patch Result:", JSON.stringify(updateResult, null, 2));
+      } else {
+        console.log("EO Contact Not Found. Creating new…");
+        const createRes = await fetch(
+          `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts?api_key=${EO_API_KEY}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(eoPayload)
+          }
+        );
+        const createResult = await createRes.json();
+        console.log("EO Create Result:", JSON.stringify(createResult, null, 2));
+      }
 
       return new Response(JSON.stringify({ status: searchData.records.length ? "updated" : "created" }), {
         status: 200,
