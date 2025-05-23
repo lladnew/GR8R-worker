@@ -1,10 +1,9 @@
-// Cloudflare Worker: Airtable Proxy v1.4.6
+// Cloudflare Worker: Airtable Proxy v1.4.7
 //
 // Changelog:
-// - Adds logging for full incoming payload from browser
-// - Logs campaignInterest and deliveryPreference for debug
-// - Logs all patch fields before sending to Airtable
-// - No logic changed from 1.4.5 yet — focused on visibility
+// - Fixes casing mismatch: handles both DeliveryPreference and deliveryPreference
+// - Handles CampaignInterest from either camelCase or PascalCase
+// - Keeps all logging intact for visibility
 
 export default {
   async fetch(request, env, ctx) {
@@ -29,10 +28,14 @@ export default {
       const body = await request.json();
       console.log("Incoming payload:", JSON.stringify(body, null, 2));
 
-      const {
-        firstName, lastName, emailAddress, phoneNumber,
-        deliveryPreference, campaignInterest, source
-      } = body;
+      const firstName = body.firstName || "";
+      const lastName = body.lastName || "";
+      const emailAddress = body.emailAddress || "";
+      const phoneNumber = body.phoneNumber || "";
+      const source = body.source || "Direct";
+
+      const deliveryPreference = body.deliveryPreference || body.DeliveryPreference || null;
+      const campaignInterest = body.campaignInterest || body.CampaignInterest || "";
 
       const headers = {
         Authorization: `Bearer ${AIRTABLE_TOKEN}`,
@@ -45,7 +48,7 @@ export default {
       console.log("Search result:", JSON.stringify(searchData, null, 2));
 
       const now = new Date().toISOString();
-      const tags = campaignInterest?.split(",").map(tag => tag.trim()).filter(Boolean) || [];
+      const tags = campaignInterest.split(",").map(tag => tag.trim()).filter(Boolean);
 
       const baseFields = {
         "First Name": firstName,
@@ -70,7 +73,7 @@ export default {
         const fields = {
           ...baseFields,
           "Subscribed Date": now,
-          "Source": source || "Direct",
+          "Source": source,
           "Status": "Pending"
         };
 
