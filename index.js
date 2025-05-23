@@ -1,11 +1,10 @@
-// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.4.8
+// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.4.9
 //
 // Changelog:
-// - Sends subscriber data directly to EmailOctopus
-// - Removes Zapier dependency entirely
-// - Adds Pivot Year and Delivery Preference to EO custom fields
-// - Logs responses from both Airtable and EmailOctopus
-// - Retains full logging for tail debugging
+// - Fixes EmailOctopus error by moving api_key to query string
+// - Skips empty fields in EO payload
+// - Logs EO payload and response for better debugging
+// - Retains Airtable create/update logic and logging
 
 export default {
   async fetch(request, env, ctx) {
@@ -40,7 +39,7 @@ export default {
 
       console.log("Incoming payload:", JSON.stringify(body, null, 2));
 
-      // Airtable setup
+      // Airtable logic
       const headers = {
         Authorization: `Bearer ${AIRTABLE_TOKEN}`,
         "Content-Type": "application/json"
@@ -67,7 +66,6 @@ export default {
       if (delivery) baseFields["Delivery Preference"] = delivery;
       if (tags.length > 0) baseFields["Campaign Interest"] = tags;
 
-      // Create or update Airtable record
       if (!searchData.records || searchData.records.length === 0) {
         const fields = {
           ...baseFields,
@@ -109,26 +107,31 @@ export default {
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
       }
 
-      // EmailOctopus integration
+      // EmailOctopus logic
+      const eoFields = {};
+      if (firstName) eoFields.FirstName = firstName;
+      if (lastName) eoFields.LastName = lastName;
+      if (phoneNumber) eoFields.Phone = phoneNumber;
+      if (delivery) eoFields.DeliveryPreference = delivery;
+      if (tags.includes("Pivot Year")) eoFields.PivotYear = "yes";
+
       const eoPayload = {
-        api_key: EO_API_KEY,
         email_address: emailAddress,
-        fields: {
-          FirstName: firstName || "",
-          LastName: lastName || "",
-          Phone: phoneNumber || "",
-          DeliveryPreference: delivery || "",
-          PivotYear: tags.includes("Pivot Year") ? "yes" : "no"
-        },
+        fields: eoFields,
         tags: tags,
         status: "subscribed"
       };
 
-      const eoRes = await fetch(`https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(eoPayload)
-      });
+      console.log("Sending to EmailOctopus:", JSON.stringify(eoPayload, null, 2));
+
+      const eoRes = await fetch(
+        `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts?api_key=${EO_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(eoPayload)
+        }
+      );
 
       const eoResult = await eoRes.json();
       console.log("EmailOctopus result:", JSON.stringify(eoResult, null, 2));
