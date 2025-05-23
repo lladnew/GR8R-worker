@@ -1,9 +1,10 @@
-// Cloudflare Worker: Airtable Proxy v1.4.5
+// Cloudflare Worker: Airtable Proxy v1.4.6
 //
 // Changelog:
-// - Fixes Delivery Preference not updating if string was valid but falsy
-// - Applies Campaign Interest if non-empty, even for single-tag values like "Newsletter"
-// - Safer logic for partial updates without overwriting valid values accidentally
+// - Adds logging for full incoming payload from browser
+// - Logs campaignInterest and deliveryPreference for debug
+// - Logs all patch fields before sending to Airtable
+// - No logic changed from 1.4.5 yet — focused on visibility
 
 export default {
   async fetch(request, env, ctx) {
@@ -26,6 +27,8 @@ export default {
 
     try {
       const body = await request.json();
+      console.log("Incoming payload:", JSON.stringify(body, null, 2));
+
       const {
         firstName, lastName, emailAddress, phoneNumber,
         deliveryPreference, campaignInterest, source
@@ -59,8 +62,11 @@ export default {
         baseFields["Campaign Interest"] = tags;
       }
 
+      console.log("Normalized tags:", tags);
+      console.log("Delivery preference:", deliveryPreference);
+      console.log("Base fields to apply:", JSON.stringify(baseFields, null, 2));
+
       if (!searchData.records || searchData.records.length === 0) {
-        // New record
         const fields = {
           ...baseFields,
           "Subscribed Date": now,
@@ -81,7 +87,6 @@ export default {
           headers: { "Access-Control-Allow-Origin": "*" }
         });
       } else {
-        // Update existing record
         const record = searchData.records[0];
         const patchFields = {};
 
