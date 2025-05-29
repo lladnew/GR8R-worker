@@ -1,8 +1,9 @@
-// Cloudflare Worker: Airtable Proxy + EmailOctopus + WhySubscribe v1.6.1
+// Cloudflare Worker: Airtable Proxy + EmailOctopus + WhySubscribe v1.6.2
 //
 // Changelog:
-// - Original EO + Airtable contact sync
-// - NEW: /api/whysubscribe endpoint with Airtable update + MailerSend alert
+// - Enhanced email match logic for /api/whysubscribe using LOWER(TRIM())
+// - Fixes false negatives from casing or spacing differences in Airtable
+// - All other logic preserved exactly
 
 export default {
   async fetch(request, env, ctx) {
@@ -34,7 +35,7 @@ export default {
 
     const body = await request.json();
 
-    // 🔥 New Feature: WhySubscribe Response Logic
+    // 🔥 Updated Feature: WhySubscribe Response Logic
     if (url.pathname === "/api/whysubscribe") {
       const { email, checkOnly, whysubscribe } = body;
 
@@ -47,7 +48,8 @@ export default {
         "Content-Type": "application/json"
       };
 
-      const searchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?filterByFormula={Email}='${email}'`;
+      const filter = `LOWER(TRIM({Email})) = '${email.trim().toLowerCase()}'`;
+      const searchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?filterByFormula=${encodeURIComponent(filter)}`;
       const searchRes = await fetch(searchUrl, { headers });
       const searchData = await searchRes.json();
 
