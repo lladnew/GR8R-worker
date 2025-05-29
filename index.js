@@ -1,13 +1,21 @@
-// Cloudflare Worker: Airtable Proxy + EmailOctopus v1.5.1
+// Cloudflare Worker: Airtable Proxy + EmailOctopus + WhySubscribe v1.6.1
 //
 // Changelog:
-// - Detects existing EO contact by email
-// - Uses PATCH if found, POST if new
-// - No tags, no status; logs EO request + response
+// - Original EO + Airtable contact sync
+// - NEW: /api/whysubscribe endpoint with Airtable update + MailerSend alert
 
 export default {
   async fetch(request, env, ctx) {
-    const { AIRTABLE_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_ID, EO_API_KEY, EO_LIST_ID } = env;
+    const {
+      AIRTABLE_TOKEN,
+      AIRTABLE_BASE_ID,
+      AIRTABLE_TABLE_ID,
+      EO_API_KEY,
+      EO_LIST_ID,
+      MAILERSEND_API_KEY
+    } = env;
+
+    const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
       return new Response(null, {
@@ -24,8 +32,85 @@ export default {
       return new Response("Method not allowed", { status: 405 });
     }
 
+    const body = await request.json();
+
+    // 🔥 New Feature: WhySubscribe Response Logic
+    if (url.pathname === "/api/whysubscribe") {
+      const { email, checkOnly, whysubscribe } = body;
+
+      if (!email) {
+        return new Response(JSON.stringify({ error: "Missing email" }), { status: 400 });
+      }
+
+      const headers = {
+        Authorization: `Bearer ${AIRTABLE_TOKEN}`,
+        "Content-Type": "application/json"
+      };
+
+      const searchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?filterByFormula={Email}='${email}'`;
+      const searchRes = await fetch(searchUrl, { headers });
+      const searchData = await searchRes.json();
+
+      if (!searchData.records || searchData.records.length === 0) {
+        return new Response(JSON.stringify({ exists: false }), {
+          status: 200,
+          headers: { "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      if (checkOnly) {
+        return new Response(JSON.stringify({ exists: true }), {
+          status: 200,
+          headers: { "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      // Submit mode – update record
+      const record = searchData.records[0];
+
+      const patchRes = await fetch(
+        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`,
+        {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ fields: { whysubscribe } })
+        }
+      );
+
+      const patchData = await patchRes.json();
+      console.log("WhySubscribe patch:", JSON.stringify(patchData, null, 2));
+
+      // Send alert email via MailerSend
+      const subject = `New \"Why Subscribe\" response from ${email}`;
+      const bodyText = `Someone responded to your WhySubscribe form:\n\nEmail: ${email}\n\nResponse:\n${whysubscribe}`;
+
+      const alertRes = await fetch("https://api.mailersend.com/v1/email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${MAILERSEND_API_KEY}`
+        },
+        body: JSON.stringify({
+          from: { email: "noreply@gr8terthings.com", name: "Gr8terThings Bot" },
+          to: [{ email: "info@gr8terthings.com" }],
+          subject,
+          text: bodyText
+        })
+      });
+
+      if (!alertRes.ok) {
+        const errMsg = await alertRes.text();
+        console.warn("MailerSend alert failed:", alertRes.status, errMsg);
+      }
+
+      return new Response(JSON.stringify({ status: "submitted" }), {
+        status: 200,
+        headers: { "Access-Control-Allow-Origin": "*" }
+      });
+    }
+
+    // 🔁 Existing Subscriber Logic Below
     try {
-      const body = await request.json();
       const {
         firstName,
         lastName,
@@ -38,7 +123,6 @@ export default {
 
       console.log("Incoming payload:", JSON.stringify(body, null, 2));
 
-      // Airtable logic
       const headers = {
         Authorization: `Bearer ${AIRTABLE_TOKEN}`,
         "Content-Type": "application/json"
@@ -52,9 +136,6 @@ export default {
       const now = new Date().toISOString();
       const tags = CampaignInterest?.split(",").map(tag => tag.trim()).filter(Boolean) || [];
       const delivery = ["Both", "Email", "Text"].includes(DeliveryPreference) ? DeliveryPreference : undefined;
-
-      console.log("Normalized tags:", tags);
-      console.log("Delivery preference:", delivery);
 
       const baseFields = {
         "First Name": firstName,
@@ -90,9 +171,6 @@ export default {
           }
         }
 
-        console.log("Updating record:", record.id);
-        console.log("Patch payload:", JSON.stringify(patchFields, null, 2));
-
         const patchRes = await fetch(
           `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`,
           {
@@ -106,7 +184,6 @@ export default {
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
       }
 
-      // EmailOctopus logic (lookup, patch or create)
       const eoFields = {};
       if (firstName) eoFields.FirstName = firstName;
       if (lastName) eoFields.LastName = lastName;
@@ -119,9 +196,6 @@ export default {
         fields: eoFields
       };
 
-      console.log("EO Payload:", JSON.stringify(eoPayload, null, 2));
-
-      // First, try to find existing EO contact
       const searchEO = await fetch(
         `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${encodeURIComponent(emailAddress)}?api_key=${EO_API_KEY}`,
         { method: "GET" }
@@ -129,7 +203,6 @@ export default {
 
       if (searchEO.status === 200) {
         const existing = await searchEO.json();
-        console.log("EO Contact Found. Updating…");
         const updateRes = await fetch(
           `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${existing.id}?api_key=${EO_API_KEY}`,
           {
@@ -141,7 +214,6 @@ export default {
         const updateResult = await updateRes.json();
         console.log("EO Patch Result:", JSON.stringify(updateResult, null, 2));
       } else {
-        console.log("EO Contact Not Found. Creating new…");
         const createRes = await fetch(
           `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts?api_key=${EO_API_KEY}`,
           {
