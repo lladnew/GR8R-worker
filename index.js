@@ -1,15 +1,21 @@
-// Cloudflare Worker: Airtable Proxy + EmailOctopus + WhySubscribe v1.6.0
+// Cloudflare Worker: Airtable Proxy + EmailOctopus + WhySubscribe v1.6.2
 //
 // Changelog:
-// - v1.6.0: Adds /api/whysubscribe POST endpoint
-//           Handles checkOnly lookup for email existence
-//           Appends to 'whysubscribe' long text field if response is submitted
-//           Sends MailerSend alert to info@gr8terthings.com
-//           Does NOT block duplicates — all responses are appended
+// - PRESERVED full v1.6.1 functionality
+// - RESTORED full subscribe + EmailOctopus logic from v1.6.0
+// - Supports both `/subscribe` POSTs and `/api/whysubscribe` POSTs
 
 export default {
   async fetch(request, env, ctx) {
-    const { AIRTABLE_TOKEN, AIRTABLE_BASE_ID, AIRTABLE_TABLE_ID, EO_API_KEY, EO_LIST_ID, MAILERSEND_API_KEY } = env;
+    const {
+      AIRTABLE_TOKEN,
+      AIRTABLE_BASE_ID,
+      AIRTABLE_TABLE_ID,
+      EO_API_KEY,
+      EO_LIST_ID,
+      MAILERSEND_API_KEY
+    } = env;
+
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
@@ -23,23 +29,28 @@ export default {
       });
     }
 
-    // 🔁 Handle /api/whysubscribe separately
-    if (url.pathname === "/api/whysubscribe" && request.method === "POST") {
+    if (request.method !== "POST") {
+      return new Response("Method not allowed", { status: 405 });
+    }
+
+    // Handle /api/whysubscribe route
+    if (url.pathname === "/api/whysubscribe") {
       try {
-        const { email, checkOnly, response } = await request.json();
+        const body = await request.json();
+        const { email, response, checkOnly } = body;
 
         if (!email) {
           return new Response(JSON.stringify({ error: "Missing email" }), {
             status: 400,
-            headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" }
+            headers: { "Access-Control-Allow-Origin": "*" }
           });
         }
 
-        // Lookup subscriber in Airtable
         const headers = {
           Authorization: `Bearer ${AIRTABLE_TOKEN}`,
           "Content-Type": "application/json"
         };
+
         const searchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?filterByFormula={Email}='${email}'`;
         const searchRes = await fetch(searchUrl, { headers });
         const searchData = await searchRes.json();
@@ -47,73 +58,73 @@ export default {
         if (!searchData.records || searchData.records.length === 0) {
           return new Response(JSON.stringify({ found: false }), {
             status: 200,
-            headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" }
+            headers: { "Access-Control-Allow-Origin": "*" }
           });
         }
 
         const record = searchData.records[0];
+        const recordId = record.id;
 
         if (checkOnly) {
           return new Response(JSON.stringify({ found: true }), {
             status: 200,
-            headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" }
+            headers: { "Access-Control-Allow-Origin": "*" }
           });
         }
 
-        // Append response to 'whysubscribe' field
-        const now = new Date().toISOString();
         const existing = record.fields["whysubscribe"] || "";
-        const appended = `${existing}\n\n[${now}]\n${response}`;
+        const timestamp = new Date().toISOString();
+        const appendText = `${existing}\n\n[${timestamp}]\n${response}`;
 
         const patchRes = await fetch(
-          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`,
+          `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${recordId}`,
           {
             method: "PATCH",
             headers,
-            body: JSON.stringify({ fields: { "whysubscribe": appended } })
+            body: JSON.stringify({ fields: { whysubscribe: appendText } })
           }
         );
 
         const patchResult = await patchRes.json();
         console.log("Appended to Airtable:", JSON.stringify(patchResult, null, 2));
 
-        // Send MailerSend alert
-        const alertRes = await fetch("https://api.mailersend.com/v1/email", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${MAILERSEND_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            from: { email: "no-reply@gr8terthings.com", name: "Gr8terThings Alerts" },
-            to: [{ email: "info@gr8terthings.com", name: "Gr8terThings" }],
-            subject: `New WhySubscribe response from ${email}`,
-            text: `The subscriber ${email} just submitted the following response:\n\n${response}`
-          })
-        });
+        try {
+          const emailAlert = {
+            from: { email: "no-reply@gr8terthings.com", name: "Gr8terThings" },
+            to: [{ email: "info@gr8terthings.com" }],
+            subject: `New WhySubscribe Response: ${email}`,
+            text: `Email: ${email}\n\n---\n\n${response}`
+          };
 
-        const alertJson = await alertRes.json();
-        console.log("MailerSend response:", JSON.stringify(alertJson, null, 2));
+          const mailerRes = await fetch("https://api.mailersend.com/v1/email", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${MAILERSEND_API_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(emailAlert)
+          });
 
-        return new Response(JSON.stringify({ status: "appended" }), {
+          const mailerJson = await mailerRes.json();
+          console.log("MailerSend response:", mailerJson);
+        } catch (mailerErr) {
+          console.warn("MailerSend failed:", mailerErr);
+        }
+
+        return new Response(JSON.stringify({ success: true }), {
           status: 200,
-          headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" }
+          headers: { "Access-Control-Allow-Origin": "*" }
         });
-
-      } catch (err) {
-        console.error("Error in /api/whysubscribe:", err);
-        return new Response("Server error", {
+      } catch (error) {
+        console.error("Error in /api/whysubscribe:", error);
+        return new Response("Internal Server Error", {
           status: 500,
           headers: { "Access-Control-Allow-Origin": "*" }
         });
       }
     }
 
-    // Default: original handler (subscribe form)
-    if (request.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
-    }
-
+    // Default subscriber handling (original subscribe logic)
     try {
       const body = await request.json();
       const {
@@ -136,10 +147,14 @@ export default {
       const searchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?filterByFormula={Email}='${emailAddress}'`;
       const searchRes = await fetch(searchUrl, { headers });
       const searchData = await searchRes.json();
+      console.log("Search result:", JSON.stringify(searchData, null, 2));
 
       const now = new Date().toISOString();
       const tags = CampaignInterest?.split(",").map(tag => tag.trim()).filter(Boolean) || [];
       const delivery = ["Both", "Email", "Text"].includes(DeliveryPreference) ? DeliveryPreference : undefined;
+
+      console.log("Normalized tags:", tags);
+      console.log("Delivery preference:", delivery);
 
       const baseFields = {
         "First Name": firstName,
@@ -175,6 +190,9 @@ export default {
           }
         }
 
+        console.log("Updating record:", record.id);
+        console.log("Patch payload:", JSON.stringify(patchFields, null, 2));
+
         const patchRes = await fetch(
           `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`,
           {
@@ -188,6 +206,7 @@ export default {
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
       }
 
+      // EmailOctopus logic
       const eoFields = {};
       if (firstName) eoFields.FirstName = firstName;
       if (lastName) eoFields.LastName = lastName;
@@ -200,6 +219,8 @@ export default {
         fields: eoFields
       };
 
+      console.log("EO Payload:", JSON.stringify(eoPayload, null, 2));
+
       const searchEO = await fetch(
         `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${encodeURIComponent(emailAddress)}?api_key=${EO_API_KEY}`,
         { method: "GET" }
@@ -207,6 +228,7 @@ export default {
 
       if (searchEO.status === 200) {
         const existing = await searchEO.json();
+        console.log("EO Contact Found. Updating…");
         const updateRes = await fetch(
           `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${existing.id}?api_key=${EO_API_KEY}`,
           {
@@ -218,6 +240,7 @@ export default {
         const updateResult = await updateRes.json();
         console.log("EO Patch Result:", JSON.stringify(updateResult, null, 2));
       } else {
+        console.log("EO Contact Not Found. Creating new…");
         const createRes = await fetch(
           `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts?api_key=${EO_API_KEY}`,
           {
@@ -234,7 +257,6 @@ export default {
         status: 200,
         headers: { "Access-Control-Allow-Origin": "*" }
       });
-
     } catch (error) {
       console.error("Error processing request:", error);
       return new Response("Internal Server Error", {
