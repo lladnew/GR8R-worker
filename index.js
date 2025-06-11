@@ -1,9 +1,8 @@
-// v1.6.3 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe 
+// v1.6.4 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe
 //
 // Changelog:
-// - PRESERVED all logic from v1.6.2
-// - ADDED double opt-in email via MailerSend on Status: Pending
-// - RETAINED EmailOctopus logic for now
+// - PATCHED MailerSend double opt-in response handling to avoid `.json()` crash on 204
+// - PRESERVED EmailOctopus logic and all existing structure
 
 export default {
   async fetch(request, env, ctx) {
@@ -214,8 +213,12 @@ export default {
             body: JSON.stringify(confirmEmail)
           });
 
-          const sendJson = await sendRes.json();
-          console.log("Double opt-in send result:", sendJson);
+          if (sendRes.ok) {
+            console.log(`✅ MailerSend: ${sendRes.status} ${sendRes.statusText}`);
+          } else {
+            const errorText = await sendRes.text();
+            console.error("❌ MailerSend error:", errorText);
+          }
         }
       } else {
         const record = searchData.records[0];
