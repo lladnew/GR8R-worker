@@ -1,6 +1,9 @@
-// v1.6.4 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe
+// v1.6.5 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe + Confirm
 //
 // Changelog:
+// - ADDED support for GET /api/confirm to handle email confirmation
+// - This endpoint updates Airtable Status from "Pending" to "Subscribed"
+// - Returns status for use by confirm.html
 // - PATCHED MailerSend double opt-in response handling to avoid `.json()` crash on 204
 // - PRESERVED EmailOctopus logic and all existing structure
 
@@ -22,9 +25,62 @@ export default {
         status: 204,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type"
         }
+      });
+    }
+
+    if (url.pathname === "/api/confirm" && request.method === "GET") {
+      const email = url.searchParams.get("email");
+      if (!email) {
+        return new Response(JSON.stringify({ status: "missing_email" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      const headers = {
+        Authorization: `Bearer ${AIRTABLE_TOKEN}`,
+        "Content-Type": "application/json"
+      };
+
+      const searchUrl = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?filterByFormula={Email}='${email}'`;
+      const searchRes = await fetch(searchUrl, { headers });
+      const searchData = await searchRes.json();
+
+      if (!searchData.records || searchData.records.length === 0) {
+        return new Response(JSON.stringify({ status: "not_found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      const record = searchData.records[0];
+      const currentStatus = record.fields.Status;
+
+      if (currentStatus === "Subscribed") {
+        return new Response(JSON.stringify({ status: "already_subscribed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        });
+      }
+
+      const patchRes = await fetch(
+        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`,
+        {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify({ fields: { Status: "Subscribed" } })
+        }
+      );
+
+      const patchResult = await patchRes.json();
+      console.log("Status updated to Subscribed:", patchResult);
+
+      return new Response(JSON.stringify({ status: "subscribed" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
       });
     }
 
@@ -122,6 +178,7 @@ export default {
       }
     }
 
+    // Normal subscribe handler
     try {
       const body = await request.json();
       const {
@@ -149,9 +206,6 @@ export default {
       const now = new Date().toISOString();
       const tags = CampaignInterest?.split(",").map(tag => tag.trim()).filter(Boolean) || [];
       const delivery = ["Both", "Email", "Text"].includes(DeliveryPreference) ? DeliveryPreference : undefined;
-
-      console.log("Normalized tags:", tags);
-      console.log("Delivery preference:", delivery);
 
       const baseFields = {
         "First Name": firstName,
@@ -191,14 +245,8 @@ export default {
               {
                 email: emailAddress,
                 substitutions: [
-                  {
-                    var: "subscriber.first_name",
-                    value: firstName
-                  },
-                  {
-                    var: "subscriber.email",
-                    value: emailAddress
-                  }
+                  { var: "subscriber.first_name", value: firstName },
+                  { var: "subscriber.email", value: emailAddress }
                 ]
               }
             ]
@@ -229,9 +277,6 @@ export default {
           }
         }
 
-        console.log("Updating record:", record.id);
-        console.log("Patch payload:", JSON.stringify(patchFields, null, 2));
-
         const patchRes = await fetch(
           `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${record.id}`,
           {
@@ -245,7 +290,6 @@ export default {
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
       }
 
-      // EO logic retained below
       const eoFields = {};
       if (firstName) eoFields.FirstName = firstName;
       if (lastName) eoFields.LastName = lastName;
@@ -258,8 +302,6 @@ export default {
         fields: eoFields
       };
 
-      console.log("EO Payload:", JSON.stringify(eoPayload, null, 2));
-
       const searchEO = await fetch(
         `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${encodeURIComponent(emailAddress)}?api_key=${EO_API_KEY}`,
         { method: "GET" }
@@ -267,7 +309,6 @@ export default {
 
       if (searchEO.status === 200) {
         const existing = await searchEO.json();
-        console.log("EO Contact Found. Updating…");
         const updateRes = await fetch(
           `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${existing.id}?api_key=${EO_API_KEY}`,
           {
@@ -279,7 +320,6 @@ export default {
         const updateResult = await updateRes.json();
         console.log("EO Patch Result:", JSON.stringify(updateResult, null, 2));
       } else {
-        console.log("EO Contact Not Found. Creating new…");
         const createRes = await fetch(
           `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts?api_key=${EO_API_KEY}`,
           {
