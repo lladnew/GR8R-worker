@@ -1,9 +1,9 @@
-// Cloudflare Worker: Airtable Proxy + EmailOctopus + WhySubscribe v1.6.2
+// v1.6.3 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe 
 //
 // Changelog:
-// - PRESERVED full v1.6.1 functionality
-// - RESTORED full subscribe + EmailOctopus logic from v1.6.0
-// - Supports both `/subscribe` POSTs and `/api/whysubscribe` POSTs
+// - PRESERVED all logic from v1.6.2
+// - ADDED double opt-in email via MailerSend on Status: Pending
+// - RETAINED EmailOctopus logic for now
 
 export default {
   async fetch(request, env, ctx) {
@@ -33,7 +33,6 @@ export default {
       return new Response("Method not allowed", { status: 405 });
     }
 
-    // Handle /api/whysubscribe route
     if (url.pathname === "/api/whysubscribe") {
       try {
         const body = await request.json();
@@ -124,7 +123,6 @@ export default {
       }
     }
 
-    // Default subscriber handling (original subscribe logic)
     try {
       const body = await request.json();
       const {
@@ -181,6 +179,44 @@ export default {
 
         const createResult = await createRes.json();
         console.log("Create result:", JSON.stringify(createResult, null, 2));
+
+        if (MAILERSEND_API_KEY && firstName && emailAddress) {
+          const confirmEmail = {
+            template_id: "zr6ke4ne1yy4on12",
+            from: {
+              email: "chad.mowery@gr8terthings.com",
+              name: "Chad from GR8R"
+            },
+            to: [{ email: emailAddress, name: firstName }],
+            variables: [
+              {
+                email: emailAddress,
+                substitutions: [
+                  {
+                    var: "subscriber.first_name",
+                    value: firstName
+                  },
+                  {
+                    var: "subscriber.email",
+                    value: emailAddress
+                  }
+                ]
+              }
+            ]
+          };
+
+          const sendRes = await fetch("https://api.mailersend.com/v1/email", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${MAILERSEND_API_KEY}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(confirmEmail)
+          });
+
+          const sendJson = await sendRes.json();
+          console.log("Double opt-in send result:", sendJson);
+        }
       } else {
         const record = searchData.records[0];
         const patchFields = {};
@@ -206,7 +242,7 @@ export default {
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
       }
 
-      // EmailOctopus logic
+      // EO logic retained below
       const eoFields = {};
       if (firstName) eoFields.FirstName = firstName;
       if (lastName) eoFields.LastName = lastName;
