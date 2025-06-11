@@ -1,11 +1,9 @@
-// v1.6.5 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe + Confirm
+// v1.6.6 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe + Confirm
 //
 // Changelog:
-// - ADDED support for GET /api/confirm to handle email confirmation
-// - This endpoint updates Airtable Status from "Pending" to "Subscribed"
-// - Returns status for use by confirm.html
-// - PATCHED MailerSend double opt-in response handling to avoid `.json()` crash on 204
-// - PRESERVED EmailOctopus logic and all existing structure
+// - FIXED MailerSend variable substitution by switching from `variables` to `personalization`
+// - ADDED logging for MailerSend payload before sending
+// - PRESERVED confirm route, EmailOctopus logic, and all existing structure
 
 export default {
   async fetch(request, env, ctx) {
@@ -241,16 +239,20 @@ export default {
               name: "Chad from GR8R"
             },
             to: [{ email: emailAddress, name: firstName }],
-            variables: [
+            personalization: [
               {
                 email: emailAddress,
-                substitutions: [
-                  { var: "subscriber.first_name", value: firstName },
-                  { var: "subscriber.email", value: emailAddress }
-                ]
+                data: {
+                  subscriber: {
+                    email: emailAddress,
+                    first_name: firstName
+                  }
+                }
               }
             ]
           };
+
+          console.log("MailerSend payload:", JSON.stringify(confirmEmail, null, 2));
 
           const sendRes = await fetch("https://api.mailersend.com/v1/email", {
             method: "POST",
