@@ -1,10 +1,7 @@
-// v1.6.7 Cloudflare Worker: Airtable Proxy + MailerSend + WhySubscribe + Confirm
+// v1.6.8 Cloudflare Worker: Subscribe worker + MailerSend + WhySubscribe + Confirm
 //
 // Changelog:
-// - REMOVED EmailOctopus integration and all related API calls
-// - CLEANED UP EO environment variables and conditional logic
-// - PRESERVED MailerSend confirmation and whySubscribe response alerts
-// - PRESERVED Airtable sync logic for subscribe and confirm endpoints
+// - changed name to gr8r-subscribe-worker - redeploying just to be sure
 
 export default {
   async fetch(request, env, ctx) {
