@@ -1,4 +1,4 @@
-name = "gr8r-airtable-proxy"
+name = "gr8r-subscribe-worker"
 main = "index.js"
 type = "javascript"
 compatibility_date = "2024-05-01"
