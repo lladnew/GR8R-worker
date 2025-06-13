@@ -1,9 +1,10 @@
-// v1.6.6 Cloudflare Worker: Airtable Proxy + EmailOctopus + MailerSend + WhySubscribe + Confirm
+// v1.6.7 Cloudflare Worker: Airtable Proxy + MailerSend + WhySubscribe + Confirm
 //
 // Changelog:
-// - FIXED MailerSend variable substitution by switching from `variables` to `personalization`
-// - ADDED logging for MailerSend payload before sending
-// - PRESERVED confirm route, EmailOctopus logic, and all existing structure
+// - REMOVED EmailOctopus integration and all related API calls
+// - CLEANED UP EO environment variables and conditional logic
+// - PRESERVED MailerSend confirmation and whySubscribe response alerts
+// - PRESERVED Airtable sync logic for subscribe and confirm endpoints
 
 export default {
   async fetch(request, env, ctx) {
@@ -11,8 +12,6 @@ export default {
       AIRTABLE_TOKEN,
       AIRTABLE_BASE_ID,
       AIRTABLE_TABLE_ID,
-      EO_API_KEY,
-      EO_LIST_ID,
       MAILERSEND_API_KEY
     } = env;
 
@@ -290,48 +289,6 @@ export default {
 
         const patchResult = await patchRes.json();
         console.log("Patch result:", JSON.stringify(patchResult, null, 2));
-      }
-
-      const eoFields = {};
-      if (firstName) eoFields.FirstName = firstName;
-      if (lastName) eoFields.LastName = lastName;
-      if (phoneNumber) eoFields.Phone = phoneNumber;
-      if (delivery) eoFields.DeliveryPreference = delivery;
-      if (tags.includes("Pivot Year")) eoFields.PivotYear = "yes";
-
-      const eoPayload = {
-        email_address: emailAddress,
-        fields: eoFields
-      };
-
-      const searchEO = await fetch(
-        `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${encodeURIComponent(emailAddress)}?api_key=${EO_API_KEY}`,
-        { method: "GET" }
-      );
-
-      if (searchEO.status === 200) {
-        const existing = await searchEO.json();
-        const updateRes = await fetch(
-          `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts/${existing.id}?api_key=${EO_API_KEY}`,
-          {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ fields: eoFields })
-          }
-        );
-        const updateResult = await updateRes.json();
-        console.log("EO Patch Result:", JSON.stringify(updateResult, null, 2));
-      } else {
-        const createRes = await fetch(
-          `https://emailoctopus.com/api/1.6/lists/${EO_LIST_ID}/contacts?api_key=${EO_API_KEY}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(eoPayload)
-          }
-        );
-        const createResult = await createRes.json();
-        console.log("EO Create Result:", JSON.stringify(createResult, null, 2));
       }
 
       return new Response(JSON.stringify({ status: searchData.records.length ? "updated" : "created" }), {
