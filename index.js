@@ -1,7 +1,15 @@
-// v1.6.8 Cloudflare Worker: Subscribe worker + MailerSend + WhySubscribe + Confirm
+// v1.6.9 Cloudflare Worker: Subscribe worker + MailerSend + WhySubscribe + Confirm
 //
 // Changelog:
-// - changed name to gr8r-subscribe-worker - redeploying just to be sure
+// - FIXED CORS issue by standardizing Access-Control-Allow-Origin headers
+// - REFACTORED CORS logic using a shared corsHeaders constant
+// - NO OTHER LOGIC CHANGES
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type"
+};
 
 export default {
   async fetch(request, env, ctx) {
@@ -17,11 +25,7 @@ export default {
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type"
-        }
+        headers: corsHeaders
       });
     }
 
@@ -30,7 +34,7 @@ export default {
       if (!email) {
         return new Response(JSON.stringify({ status: "missing_email" }), {
           status: 400,
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
 
@@ -46,7 +50,7 @@ export default {
       if (!searchData.records || searchData.records.length === 0) {
         return new Response(JSON.stringify({ status: "not_found" }), {
           status: 404,
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
 
@@ -56,7 +60,7 @@ export default {
       if (currentStatus === "Subscribed") {
         return new Response(JSON.stringify({ status: "already_subscribed" }), {
           status: 200,
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
 
@@ -74,12 +78,15 @@ export default {
 
       return new Response(JSON.stringify({ status: "subscribed" }), {
         status: 200,
-        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     }
 
     if (request.method !== "POST") {
-      return new Response("Method not allowed", { status: 405 });
+      return new Response("Method not allowed", {
+        status: 405,
+        headers: corsHeaders
+      });
     }
 
     if (url.pathname === "/api/whysubscribe") {
@@ -90,7 +97,7 @@ export default {
         if (!email) {
           return new Response(JSON.stringify({ error: "Missing email" }), {
             status: 400,
-            headers: { "Access-Control-Allow-Origin": "*" }
+            headers: corsHeaders
           });
         }
 
@@ -106,7 +113,7 @@ export default {
         if (!searchData.records || searchData.records.length === 0) {
           return new Response(JSON.stringify({ found: false }), {
             status: 200,
-            headers: { "Access-Control-Allow-Origin": "*" }
+            headers: corsHeaders
           });
         }
 
@@ -116,7 +123,7 @@ export default {
         if (checkOnly) {
           return new Response(JSON.stringify({ found: true }), {
             status: 200,
-            headers: { "Access-Control-Allow-Origin": "*" }
+            headers: corsHeaders
           });
         }
 
@@ -161,18 +168,17 @@ export default {
 
         return new Response(JSON.stringify({ success: true }), {
           status: 200,
-          headers: { "Access-Control-Allow-Origin": "*" }
+          headers: corsHeaders
         });
       } catch (error) {
         console.error("Error in /api/whysubscribe:", error);
         return new Response("Internal Server Error", {
           status: 500,
-          headers: { "Access-Control-Allow-Origin": "*" }
+          headers: corsHeaders
         });
       }
     }
 
-    // Normal subscribe handler
     try {
       const body = await request.json();
       const {
@@ -290,13 +296,13 @@ export default {
 
       return new Response(JSON.stringify({ status: searchData.records.length ? "updated" : "created" }), {
         status: 200,
-        headers: { "Access-Control-Allow-Origin": "*" }
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
       });
     } catch (error) {
       console.error("Error processing request:", error);
       return new Response("Internal Server Error", {
         status: 500,
-        headers: { "Access-Control-Allow-Origin": "*" }
+        headers: corsHeaders
       });
     }
   }
