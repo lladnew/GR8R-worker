@@ -1,0 +1,7 @@
+name = "gr8r-subscribe-worker"
+main = "index.js"
+compatibility_date = "2024-05-01"
+
+[[routes]]
+pattern = "api.gr8r.com/api/subscribe*"
+zone_name = "gr8r.com"
